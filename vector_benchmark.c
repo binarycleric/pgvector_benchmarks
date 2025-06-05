@@ -180,7 +180,7 @@ get_time_us(void)
 
 /* Compare two floats with epsilon and percentage difference */
 static bool
-float_equal(float a, float b)
+float_within_tolerance(float a, float b)
 {
     float abs_diff = fabsf(a - b);
     float percent_diff = (abs_diff / b) * 100.0f;
@@ -215,13 +215,30 @@ main(void)
 
     /* Verify L2 distance implementations return the same results */
     printf("Verifying L2 distance implementations...\n");
+    float total_diff = 0.0f;
+    float max_diff = 0.0f;
+    float max_percent_diff = 0.0f;
+    int diff_count = 0;
+
     for (int i = 0; i < NUM_VECTORS; i++) {
         float neon_result = VectorL2SquaredDistanceNEON(DIM, &vectors[i * DIM], query_vec);
         float simple_result = VectorL2SquaredDistanceSimple(DIM, &vectors[i * DIM], query_vec);
 
-        if (!float_equal(neon_result, simple_result)) {
-            float abs_diff = fabsf(neon_result - simple_result);
-            float percent_diff = (abs_diff / simple_result) * 100.0f;
+        float abs_diff = fabsf(neon_result - simple_result);
+        float percent_diff = (abs_diff / simple_result) * 100.0f;
+
+        // Track all differences
+        total_diff += abs_diff;
+        diff_count++;
+
+        if (abs_diff > max_diff) {
+            max_diff = abs_diff;
+        }
+        if (percent_diff > max_percent_diff) {
+            max_percent_diff = percent_diff;
+        }
+
+        if (!float_within_tolerance(neon_result, simple_result)) {
             printf("L2 distance mismatch at vector %d:\n", i);
             printf("  NEON:    %f\n", neon_result);
             printf("  Simple:  %f\n", simple_result);
@@ -238,7 +255,12 @@ main(void)
         free(query_vec);
         return 1;
     }
-    printf("L2 distance verification passed!\n\n");
+
+    float avg_diff = total_diff / diff_count;
+    printf("L2 distance verification passed!\n");
+    printf("Average difference: %.9f\n", avg_diff);
+    printf("Maximum difference: %.9f (%.6f%%)\n", max_diff, max_percent_diff);
+    printf("Tolerance: %.6f%%\n\n", MAX_PERCENT_DIFF);
 
 /*
     printf("Verifying inner product implementations...\n");
@@ -246,7 +268,7 @@ main(void)
         float neon_result = VectorInnerProductNEON(DIM, &vectors[i * DIM], query_vec);
         float simple_result = VectorInnerProductSimple(DIM, &vectors[i * DIM], query_vec);
 
-        if (!float_equal(neon_result, simple_result)) {
+        if (!float_within_tolerance(neon_result, simple_result)) {
             float abs_diff = fabsf(neon_result - simple_result);
             float percent_diff = (abs_diff / fabsf(simple_result)) * 100.0f;
             printf("Inner product mismatch at vector %d:\n", i);

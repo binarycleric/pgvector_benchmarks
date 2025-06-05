@@ -19,7 +19,7 @@ vector_benchmark: vector_benchmark.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 run: vector_benchmark
-	./vector_benchmark
+	./vector_benchmark && $(MAKE) clean
 
 clean:
 	rm -f vector_benchmark
