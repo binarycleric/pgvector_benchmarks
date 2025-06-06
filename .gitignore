@@ -52,3 +52,7 @@ Mkfile.old
 dkms.conf
 
 vector_benchmark
+vector_benchmark_arm64
+vector_benchmark.s
+qemu-linux
+qemu-test

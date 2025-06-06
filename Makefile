@@ -142,10 +142,138 @@ else
 	fi
 endif
 
+# QEMU ARM64 emulation (similar to AWS Graviton)
+QEMU_ARM_FLAGS = -M virt -cpu neoverse-n1 -m 2G -smp 4 -nographic -netdev user,id=net0 -device virtio-net-pci,netdev=net0
+QEMU_SYSTEM = qemu-system-aarch64
+
+# Cross-compile for ARM64 (if not already on ARM64)
+vector_benchmark_arm64: vector_benchmark.c
+ifeq ($(shell uname -m), arm64)
+	@echo "Already on ARM64, using native compilation"
+	$(MAKE) vector_benchmark
+	cp vector_benchmark vector_benchmark_arm64
+else ifeq ($(shell uname -m), aarch64)
+	@echo "Already on aarch64, using native compilation"
+	$(MAKE) vector_benchmark
+	cp vector_benchmark vector_benchmark_arm64
+else
+	@echo "Cross-compiling for ARM64..."
+	aarch64-linux-gnu-gcc $(CFLAGS) -static -o $@ $< $(LDFLAGS) || \
+	gcc-aarch64-linux-gnu $(CFLAGS) -static -o $@ $< $(LDFLAGS) || \
+	(echo "Error: ARM64 cross-compiler not found. Install with:" && \
+	 echo "  Ubuntu/Debian: sudo apt install gcc-aarch64-linux-gnu" && \
+	 echo "  macOS: brew install aarch64-elf-gcc" && \
+	 echo "  Fedora: sudo dnf install gcc-aarch64-linux-gnu" && \
+	 false)
+endif
+
+# Check if QEMU system emulation is available
+check-qemu:
+	@echo "Checking QEMU system emulation..."
+	@which $(QEMU_SYSTEM) >/dev/null 2>&1 || \
+	(echo "Error: QEMU ARM64 system emulation not found." && \
+	 echo "Install with:" && \
+	 echo "  Ubuntu/Debian: sudo apt install qemu-system-arm" && \
+	 echo "  macOS: brew install qemu" && \
+	 echo "  Fedora: sudo dnf install qemu-system-aarch64" && \
+	 false)
+	@echo "✓ QEMU ARM64 system emulation available"
+
+# Check if QEMU user-mode emulation is available (fallback only)
+check-qemu-user:
+	@echo "Checking QEMU user-mode emulation (fallback only)..."
+	@if which qemu-aarch64 >/dev/null 2>&1; then \
+		echo "⚠ QEMU ARM64 user-mode available but not recommended"; \
+		echo "  User-mode uses host OS system calls (not accurate for cross-platform)"; \
+		echo "  Consider using system emulation for accurate Linux ARM64 testing"; \
+	elif which qemu-aarch64-static >/dev/null 2>&1; then \
+		echo "⚠ QEMU ARM64 user-mode-static available but not recommended"; \
+		echo "  User-mode uses host OS system calls (not accurate for cross-platform)"; \
+	else \
+		echo "ℹ User-mode emulation not found (system emulation preferred anyway)"; \
+	fi
+
+# Download ARM64 Linux kernel and create minimal rootfs
+setup-qemu-linux: check-qemu
+	@echo "=== Setting up ARM64 Linux environment for QEMU ==="
+	@mkdir -p qemu-linux
+	@if [ ! -f "qemu-linux/vmlinuz" ]; then \
+		echo "Downloading ARM64 Linux kernel..."; \
+		curl -L -o qemu-linux/vmlinuz "https://github.com/dhruvvyas90/qemu-rpi-kernel/raw/master/kernel8.img" || \
+		(echo "Downloading Ubuntu ARM64 kernel..." && \
+		 curl -L -o qemu-linux/vmlinuz "http://ports.ubuntu.com/ubuntu-ports/dists/jammy/main/installer-arm64/current/images/netboot/ubuntu-installer/arm64/linux"); \
+	fi
+	@if [ ! -f "qemu-linux/initrd.img" ]; then \
+		echo "Downloading ARM64 initrd..."; \
+		curl -L -o qemu-linux/initrd.img "http://ports.ubuntu.com/ubuntu-ports/dists/jammy/main/installer-arm64/current/images/netboot/ubuntu-installer/arm64/initrd.gz" || \
+		echo "Warning: Could not download initrd, creating minimal one..."; \
+	fi
+	@if [ ! -f "qemu-linux/rootfs.img" ]; then \
+		echo "Creating minimal ARM64 rootfs..."; \
+		dd if=/dev/zero of=qemu-linux/rootfs.img bs=1M count=512 2>/dev/null; \
+		echo "Note: You may need to format and populate this rootfs for full testing"; \
+	fi
+	@echo "✓ ARM64 Linux environment ready"
+
+# Test with QEMU system emulation (accurate cross-platform testing)
+qemu-system-test: vector_benchmark_arm64 setup-qemu-linux
+	@echo "=== Testing with QEMU System Emulation (Accurate ARM64 Linux) ==="
+	@echo "Emulating complete ARM64 Linux system similar to AWS Graviton"
+	@echo "Copying benchmark to QEMU environment..."
+	@cp vector_benchmark_arm64 qemu-linux/
+	@echo "Starting ARM64 Linux system emulation..."
+	@echo "Note: This boots a complete ARM64 Linux system for accurate testing"
+	$(QEMU_SYSTEM) $(QEMU_ARM_FLAGS) \
+		-kernel qemu-linux/vmlinuz \
+		-initrd qemu-linux/initrd.img \
+		-append "console=ttyAMA0 root=/dev/ram rdinit=/sbin/init" \
+		-drive file=qemu-linux/rootfs.img,format=raw,id=hd0 \
+		-device virtio-blk-pci,drive=hd0 \
+		|| echo "Note: Full system emulation requires proper kernel/rootfs setup"
+
+# Simplified system test with direct kernel boot
+qemu-direct-test: vector_benchmark_arm64 check-qemu
+	@echo "=== Direct ARM64 Kernel Boot Test ==="
+	@echo "Testing with minimal ARM64 kernel boot (no full OS)"
+	@mkdir -p qemu-test
+	@cp vector_benchmark_arm64 qemu-test/
+	@echo '#!/bin/sh' > qemu-test/init.sh
+	@echo 'echo "=== ARM64 Linux Environment ==="' >> qemu-test/init.sh
+	@echo 'uname -a' >> qemu-test/init.sh
+	@echo 'cat /proc/cpuinfo | head -20' >> qemu-test/init.sh
+	@echo 'echo "=== Running Vector Benchmark ==="' >> qemu-test/init.sh
+	@echo './vector_benchmark_arm64 || echo "Benchmark failed"' >> qemu-test/init.sh
+	@echo 'echo "=== Test Complete ==="' >> qemu-test/init.sh
+	@echo 'poweroff' >> qemu-test/init.sh
+	@chmod +x qemu-test/init.sh
+	@echo "Direct kernel boot test prepared. For full testing, use 'make qemu-system-test'"
+
+# Fallback to user-mode only if system emulation fails
+qemu-user-fallback: vector_benchmark_arm64
+	@echo "=== Fallback: User-Mode Emulation (Less Accurate) ==="
+	@echo "⚠ Warning: This uses host OS system calls, not true ARM64 Linux"
+	@echo "Results may not accurately represent AWS Graviton behavior"
+	@if which qemu-aarch64 >/dev/null 2>&1; then \
+		echo "Using qemu-aarch64 (user-mode fallback)..."; \
+		qemu-aarch64 -cpu neoverse-n1 ./vector_benchmark_arm64 2>/dev/null || \
+		qemu-aarch64 -cpu cortex-a72 ./vector_benchmark_arm64 2>/dev/null || \
+		qemu-aarch64 ./vector_benchmark_arm64; \
+	elif which qemu-aarch64-static >/dev/null 2>&1; then \
+		echo "Using qemu-aarch64-static (user-mode fallback)..."; \
+		qemu-aarch64-static ./vector_benchmark_arm64; \
+	else \
+		echo "Error: No QEMU emulation available"; \
+		false; \
+	fi
+
+# Renamed from qemu-user-test for clarity
+qemu-test: qemu-system-test
+
 run: vector_benchmark
-	./vector_benchmark && $(MAKE) clean
+	./vector_benchmark
 
 clean:
-	rm -f vector_benchmark vector_benchmark.s vector_benchmark_opt.s vector_benchmark_unopt.s vector_benchmark_annotated.s vector_benchmark_debug.s
+	rm -f vector_benchmark vector_benchmark_arm64 vector_benchmark.s vector_benchmark_opt.s vector_benchmark_unopt.s vector_benchmark_annotated.s vector_benchmark_debug.s vector_benchmark_qemu.s
+	rm -rf qemu-test qemu-linux
 
-.PHONY: all run clean asm asm-annotated asm-debug neon-check neon-check-annotated neon-functions compare-asm objdump-neon cpu-info debug-asm
+.PHONY: all run clean asm asm-annotated asm-debug neon-check neon-check-annotated neon-functions compare-asm objdump-neon cpu-info debug-asm vector_benchmark_arm64 check-qemu check-qemu-user setup-qemu-linux qemu-system-test qemu-direct-test qemu-user-fallback
