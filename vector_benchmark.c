@@ -14,66 +14,6 @@
 
 /* NEON implementation */
 static inline float
-VectorCosineSimilarityNEON(int dim, float *ax, float *bx)
-{
-    float32x4_t dot_sum = vdupq_n_f32(0.0f);
-    float32x4_t norm_a_sum = vdupq_n_f32(0.0f);
-    float32x4_t norm_b_sum = vdupq_n_f32(0.0f);
-    float32x4_t a, b;
-    float32x2_t sum2;
-    float remaining_dot = 0.0f;
-    float remaining_norm_a = 0.0f;
-    float remaining_norm_b = 0.0f;
-    int i = 0;
-
-    for (; i < dim - 3; i += 4) {
-        a = vld1q_f32(&ax[i]);
-        b = vld1q_f32(&bx[i]);
-
-        dot_sum = vaddq_f32(dot_sum, vmulq_f32(a, b));
-        norm_a_sum = vaddq_f32(norm_a_sum, vmulq_f32(a, a));
-        norm_b_sum = vaddq_f32(norm_b_sum, vmulq_f32(b, b));
-    }
-
-    for (; i < dim; i++) {
-        remaining_dot += ax[i] * bx[i];
-        remaining_norm_a += ax[i] * ax[i];
-        remaining_norm_b += bx[i] * bx[i];
-    }
-
-    sum2 = vadd_f32(vget_low_f32(dot_sum), vget_high_f32(dot_sum));
-    float dot_product = vget_lane_f32(vpadd_f32(sum2, sum2), 0) + remaining_dot;
-
-    sum2 = vadd_f32(vget_low_f32(norm_a_sum), vget_high_f32(norm_a_sum));
-    float norm_a = vget_lane_f32(vpadd_f32(sum2, sum2), 0) + remaining_norm_a;
-
-    sum2 = vadd_f32(vget_low_f32(norm_b_sum), vget_high_f32(norm_b_sum));
-    float norm_b = vget_lane_f32(vpadd_f32(sum2, sum2), 0) + remaining_norm_b;
-
-    return dot_product / sqrtf(norm_a * norm_b);
-}
-
-static inline double
-VectorCosineSimilarity(int dim, float *ax, float *bx)
-{
-	float		similarity = 0.0;
-	float		norma = 0.0;
-	float		normb = 0.0;
-
-	/* Auto-vectorized */
-	for (int i = 0; i < dim; i++)
-	{
-		similarity += ax[i] * bx[i];
-		norma += ax[i] * ax[i];
-		normb += bx[i] * bx[i];
-	}
-
-	/* Use sqrt(a * b) over sqrt(a) * sqrt(b) */
-	return (double) similarity / sqrt((double) norma * (double) normb);
-}
-
-/* NEON implementation */
-static inline float
 VectorL2SquaredDistanceNEON(int dim, float *ax, float *bx)
 {
     float32x4_t sum1 = vdupq_n_f32(0.0f);
@@ -144,76 +84,6 @@ VectorL2SquaredDistanceSimple(int dim, float *ax, float *bx)
 	return distance;
 }
 
-
-static inline float
-VectorInnerProductNEON(int dim, float *ax, float *bx)
-{
-#ifdef __ARM_FEATURE_FMA
-    // Use FMA instructions when available
-    float32x4_t sum = vdupq_n_f32(0.0f);
-    float32x4_t a, b;
-    float32x2_t sum2;
-    float remaining_sum = 0.0f;
-    int i = 0;
-
-    // Process 4 elements at a time using FMA
-    for (; i < dim - 3; i += 4) {
-        a = vld1q_f32(&ax[i]);
-        b = vld1q_f32(&bx[i]);
-        sum = vfmaq_f32(sum, a, b);  // Fused multiply-add
-    }
-
-    // Handle remaining elements
-    for (; i < dim; i++) {
-        remaining_sum += ax[i] * bx[i];
-    }
-
-    // Horizontal sum
-    sum2 = vadd_f32(vget_low_f32(sum), vget_high_f32(sum));
-    return vget_lane_f32(vpadd_f32(sum2, sum2), 0) + remaining_sum;
-#else
-    // Fallback to a more precise accumulation pattern
-    float sum = 0.0f;
-    float32x4_t a, b;
-    float32x4_t prod;
-    float32x2_t sum2;
-    int i = 0;
-
-    // Process 4 elements at a time
-    for (; i < dim - 3; i += 4) {
-        a = vld1q_f32(&ax[i]);
-        b = vld1q_f32(&bx[i]);
-        prod = vmulq_f32(a, b);
-
-        // Accumulate in a way that minimizes floating-point error
-        float32x2_t lo = vget_low_f32(prod);
-        float32x2_t hi = vget_high_f32(prod);
-        float32x2_t sum_pair = vadd_f32(lo, hi);
-        float pair_sum = vget_lane_f32(vpadd_f32(sum_pair, sum_pair), 0);
-        sum += pair_sum;
-    }
-
-    // Handle remaining elements
-    for (; i < dim; i++) {
-        sum += ax[i] * bx[i];
-    }
-
-    return sum;
-#endif
-}
-
-static inline float
-VectorInnerProductSimple(int dim, float *ax, float *bx)
-{
-	float		distance = 0.0;
-
-	/* Auto-vectorized */
-	for (int i = 0; i < dim; i++)
-		distance += ax[i] * bx[i];
-
-	return distance;
-}
-
 /* Generate random float between -1 and 1 */
 static float
 random_float(void)
@@ -258,9 +128,20 @@ test_l2_distance(float *vectors, float *query_vec)
     /* Verify L2 distance implementations return the same results */
     printf("Verifying L2 distance implementations...\n");
     float total_diff = 0.0f;
+    float total_percent_diff = 0.0f;
     float max_diff = 0.0f;
     float max_percent_diff = 0.0f;
+    float min_diff = INFINITY;
+    float min_percent_diff = INFINITY;
     int diff_count = 0;
+
+    /* Arrays to store all differences for percentile calculation */
+    float *abs_diffs = (float *)malloc(NUM_VECTORS * sizeof(float));
+    float *percent_diffs = (float *)malloc(NUM_VECTORS * sizeof(float));
+    if (!abs_diffs || !percent_diffs) {
+        fprintf(stderr, "Memory allocation failed for difference arrays\n");
+        return;
+    }
 
     for (int i = 0; i < NUM_VECTORS; i++) {
         float neon_result = VectorL2SquaredDistanceNEON(DIM, &vectors[i * DIM], query_vec);
@@ -269,8 +150,13 @@ test_l2_distance(float *vectors, float *query_vec)
         float abs_diff = fabsf(neon_result - simple_result);
         float percent_diff = (abs_diff / simple_result) * 100.0f;
 
+        /* Store differences for percentile calculation */
+        abs_diffs[i] = abs_diff;
+        percent_diffs[i] = percent_diff;
+
         // Track all differences
         total_diff += abs_diff;
+        total_percent_diff += percent_diff;
         diff_count++;
 
         if (abs_diff > max_diff) {
@@ -278,6 +164,12 @@ test_l2_distance(float *vectors, float *query_vec)
         }
         if (percent_diff > max_percent_diff) {
             max_percent_diff = percent_diff;
+        }
+        if (abs_diff < min_diff) {
+            min_diff = abs_diff;
+        }
+        if (percent_diff < min_percent_diff) {
+            min_percent_diff = percent_diff;
         }
 
         if (!float_within_tolerance(neon_result, simple_result)) {
@@ -289,10 +181,43 @@ test_l2_distance(float *vectors, float *query_vec)
         }
     }
 
+    /* Sort arrays for percentile calculation */
+    /* Simple bubble sort for small arrays - could use qsort for efficiency */
+    for (int i = 0; i < NUM_VECTORS - 1; i++) {
+        for (int j = 0; j < NUM_VECTORS - i - 1; j++) {
+            if (abs_diffs[j] > abs_diffs[j + 1]) {
+                float temp = abs_diffs[j];
+                abs_diffs[j] = abs_diffs[j + 1];
+                abs_diffs[j + 1] = temp;
+            }
+            if (percent_diffs[j] > percent_diffs[j + 1]) {
+                float temp = percent_diffs[j];
+                percent_diffs[j] = percent_diffs[j + 1];
+                percent_diffs[j + 1] = temp;
+            }
+        }
+    }
+
+    /* Calculate percentiles */
+    int p95_idx = (int)((NUM_VECTORS - 1) * 0.95);
+    int p99_idx = (int)((NUM_VECTORS - 1) * 0.99);
+    float p95_diff = abs_diffs[p95_idx];
+    float p95_percent_diff = percent_diffs[p95_idx];
+    float p99_diff = abs_diffs[p99_idx];
+    float p99_percent_diff = percent_diffs[p99_idx];
+
     float avg_diff = total_diff / diff_count;
-    printf("Average difference: %.9f\n", avg_diff);
+    float avg_percent_diff = total_percent_diff / diff_count;
+    printf("Minimum difference: %.9f (%.6f%%)\n", min_diff, min_percent_diff);
+    printf("Average difference: %.9f (%.6f%%)\n", avg_diff, avg_percent_diff);
+    printf("P95 difference:     %.9f (%.6f%%)\n", p95_diff, p95_percent_diff);
+    printf("P99 difference:     %.9f (%.6f%%)\n", p99_diff, p99_percent_diff);
     printf("Maximum difference: %.9f (%.6f%%)\n", max_diff, max_percent_diff);
     printf("Tolerance: %.6f%%\n\n", MAX_PERCENT_DIFF);
+
+    /* Clean up */
+    free(abs_diffs);
+    free(percent_diffs);
 
     /* Warm up */
     for (int i = 0; i < 10; i++) {
@@ -331,151 +256,6 @@ test_l2_distance(float *vectors, float *query_vec)
     printf("\nL2 Distance Speedup: %.2fx\n\n", (float)simple_l2_time / neon_l2_time);
 }
 
-/* Test Cosine Similarity implementations */
-static void
-test_cosine_similarity(float *vectors, float *query_vec)
-{
-    int64_t start_time, end_time;
-    double total_neon_cosine = 0.0, total_simple_cosine = 0.0;
-    int64_t neon_cosine_time = 0, simple_cosine_time = 0;
-
-    printf("Verifying cosine similarity implementations...\n");
-    float total_cosine_diff = 0.0f;
-    float max_cosine_diff = 0.0f;
-    float max_cosine_percent_diff = 0.0f;
-    int cosine_diff_count = 0;
-
-    for (int i = 0; i < NUM_VECTORS; i++) {
-        float neon_result = VectorCosineSimilarityNEON(DIM, &vectors[i * DIM], query_vec);
-        double simple_result = VectorCosineSimilarity(DIM, &vectors[i * DIM], query_vec);
-
-        float abs_diff = fabsf(neon_result - (float)simple_result);
-        float percent_diff = (abs_diff / fabsf((float)simple_result)) * 100.0f;
-
-        // Track all differences
-        total_cosine_diff += abs_diff;
-        cosine_diff_count++;
-
-        if (abs_diff > max_cosine_diff) {
-            max_cosine_diff = abs_diff;
-        }
-        if (percent_diff > max_cosine_percent_diff) {
-            max_cosine_percent_diff = percent_diff;
-        }
-
-        if (!float_within_tolerance(neon_result, (float)simple_result)) {
-            printf("Cosine similarity mismatch at vector %d:\n", i);
-            printf("  NEON:    %f\n", neon_result);
-            printf("  Simple:  %f\n", (float)simple_result);
-            printf("  Diff:    %f (%.6f%%)\n", abs_diff, percent_diff);
-            printf("  Max allowed diff: %.6f%%\n", MAX_PERCENT_DIFF);
-        }
-    }
-
-    float avg_cosine_diff = total_cosine_diff / cosine_diff_count;
-    printf("Average difference: %.9f\n", avg_cosine_diff);
-    printf("Maximum difference: %.9f (%.6f%%)\n", max_cosine_diff, max_cosine_percent_diff);
-    printf("Tolerance: %.6f%%\n\n", MAX_PERCENT_DIFF);
-
-    /* Warm up */
-    for (int i = 0; i < 10; i++) {
-        VectorCosineSimilarityNEON(DIM, &vectors[i * DIM], query_vec);
-        VectorCosineSimilarity(DIM, &vectors[i * DIM], query_vec);
-    }
-
-    /* Benchmark cosine similarity implementations */
-    start_time = get_time_us();
-    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
-        for (int i = 0; i < NUM_VECTORS; i++) {
-            total_neon_cosine += VectorCosineSimilarityNEON(DIM, &vectors[i * DIM], query_vec);
-        }
-    }
-    end_time = get_time_us();
-    neon_cosine_time = end_time - start_time;
-
-    start_time = get_time_us();
-    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
-        for (int i = 0; i < NUM_VECTORS; i++) {
-            total_simple_cosine += VectorCosineSimilarity(DIM, &vectors[i * DIM], query_vec);
-        }
-    }
-    end_time = get_time_us();
-    simple_cosine_time = end_time - start_time;
-
-    printf("Cosine Similarity Benchmark Results:\n");
-    printf("NEON Implementation:\n");
-    printf("  Total time: %.2f ms\n", neon_cosine_time / 1000.0);
-    printf("  Average time per vector: %.3f us\n", (float)neon_cosine_time / (NUM_VECTORS * NUM_ITERATIONS));
-    printf("  Total similarity sum: %f\n", total_neon_cosine);
-    printf("\nSimple Implementation:\n");
-    printf("  Total time: %.2f ms\n", simple_cosine_time / 1000.0);
-    printf("  Average time per vector: %.3f us\n", (float)simple_cosine_time / (NUM_VECTORS * NUM_ITERATIONS));
-    printf("  Total similarity sum: %f\n", total_simple_cosine);
-    printf("\nCosine Similarity Speedup: %.2fx\n\n", (float)simple_cosine_time / neon_cosine_time);
-}
-
-/* Test Inner Product implementations */
-static void
-test_inner_product(float *vectors, float *query_vec)
-{
-    int64_t start_time, end_time;
-    float total_neon_ip = 0.0f, total_simple_ip = 0.0f;
-    int64_t neon_ip_time = 0, simple_ip_time = 0;
-
-    printf("Verifying inner product implementations...\n");
-    for (int i = 0; i < NUM_VECTORS; i++) {
-        float neon_result = VectorInnerProductNEON(DIM, &vectors[i * DIM], query_vec);
-        float simple_result = VectorInnerProductSimple(DIM, &vectors[i * DIM], query_vec);
-
-        if (!float_within_tolerance(neon_result, simple_result)) {
-            float abs_diff = fabsf(neon_result - simple_result);
-            float percent_diff = (abs_diff / fabsf(simple_result)) * 100.0f;
-            printf("Inner product mismatch at vector %d:\n", i);
-            printf("  NEON:    %f\n", neon_result);
-            printf("  Simple:  %f\n", simple_result);
-            printf("  Diff:    %f (%.6f%%)\n", abs_diff, percent_diff);
-            printf("  Max allowed diff: %.6f%%\n", MAX_PERCENT_DIFF);
-        }
-    }
-    printf("Inner product verification completed.\n\n");
-
-    /* Warm up */
-    for (int i = 0; i < 10; i++) {
-        VectorInnerProductNEON(DIM, &vectors[i * DIM], query_vec);
-        VectorInnerProductSimple(DIM, &vectors[i * DIM], query_vec);
-    }
-
-    /* Benchmark inner product implementations */
-    start_time = get_time_us();
-    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
-        for (int i = 0; i < NUM_VECTORS; i++) {
-            total_neon_ip += VectorInnerProductNEON(DIM, &vectors[i * DIM], query_vec);
-        }
-    }
-    end_time = get_time_us();
-    neon_ip_time = end_time - start_time;
-
-    start_time = get_time_us();
-    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
-        for (int i = 0; i < NUM_VECTORS; i++) {
-            total_simple_ip += VectorInnerProductSimple(DIM, &vectors[i * DIM], query_vec);
-        }
-    }
-    end_time = get_time_us();
-    simple_ip_time = end_time - start_time;
-
-    printf("Inner Product Benchmark Results:\n");
-    printf("NEON Implementation:\n");
-    printf("  Total time: %.2f ms\n", neon_ip_time / 1000.0);
-    printf("  Average time per vector: %.3f us\n", (float)neon_ip_time / (NUM_VECTORS * NUM_ITERATIONS));
-    printf("  Total product sum: %f\n", total_neon_ip);
-    printf("\nSimple Implementation:\n");
-    printf("  Total time: %.2f ms\n", simple_ip_time / 1000.0);
-    printf("  Average time per vector: %.3f us\n", (float)simple_ip_time / (NUM_VECTORS * NUM_ITERATIONS));
-    printf("  Total product sum: %f\n", total_simple_ip);
-    printf("\nInner Product Speedup: %.2fx\n\n", (float)simple_ip_time / neon_ip_time);
-}
-
 int
 main(void)
 {
@@ -502,9 +282,30 @@ main(void)
     printf("Number of vectors: %d\n", NUM_VECTORS);
     printf("Number of iterations: %d\n\n", NUM_ITERATIONS);
 
+    /* Print query vector */
+    printf("Query Vector (first 10 dimensions):\n");
+    for (int i = 0; i < 10 && i < DIM; i++) {
+        printf("  [%d]: %.6f\n", i, query_vec[i]);
+    }
+    if (DIM > 10) {
+        printf("  ... (%d more dimensions)\n", DIM - 10);
+    }
+    printf("\n");
+
+    /* Print first few vectors from the dataset */
+    printf("Sample Dataset Vectors (first 3 vectors, first 10 dimensions each):\n");
+    for (int v = 0; v < 3 && v < NUM_VECTORS; v++) {
+        printf("Vector %d:\n", v);
+        for (int i = 0; i < 10 && i < DIM; i++) {
+            printf("  [%d]: %.6f\n", i, vectors[v * DIM + i]);
+        }
+        if (DIM > 10) {
+            printf("  ... (%d more dimensions)\n", DIM - 10);
+        }
+        printf("\n");
+    }
+
     test_l2_distance(vectors, query_vec);
-    // test_cosine_similarity(vectors, query_vec);
-    // test_inner_product(vectors, query_vec);
 
     free(vectors);
     free(query_vec);
