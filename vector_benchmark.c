@@ -12,7 +12,7 @@
 #define EPSILON 0.000001f  // Small value for float comparison
 #define MAX_PERCENT_DIFF 0.00025f  // Maximum allowed percentage difference
 
-/* NEON implementation */
+/* Original NEON implementation */
 static inline float
 VectorL2SquaredDistanceNEON(int dim, float *ax, float *bx)
 {
@@ -63,6 +63,125 @@ VectorL2SquaredDistanceNEON(int dim, float *ax, float *bx)
     sum_hi = vget_high_f32(sum1);
     sum_half = vadd_f32(sum_lo, sum_hi);
     neon_sum = vget_lane_f32(vpadd_f32(sum_half, sum_half), 0);
+
+    return neon_sum + remaining_sum;
+}
+
+/*
+   High-performance NEON implementation with FMA and optimal unrolling.
+   Fused Multiply-Add (FMA) is a way to perform two multiplications and
+   an addition in a single instruction.
+*/
+static inline float
+VectorL2SquaredDistanceNEON_FMA(int dim, float *ax, float *bx)
+{
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
+    float32x4_t sum3 = vdupq_n_f32(0.0f);
+    float32x4_t sum4 = vdupq_n_f32(0.0f);
+    float32x4_t a1, a2, a3, a4;
+    float32x4_t b1, b2, b3, b4;
+    float32x4_t diff1, diff2, diff3, diff4;
+    int i = 0;
+
+    /* Unroll by 16 with fused multiply-add for best performance and accuracy */
+    for (; i < dim - 15; i += 16) {
+        a1 = vld1q_f32(&ax[i]);
+        b1 = vld1q_f32(&bx[i]);
+        diff1 = vsubq_f32(a1, b1);
+        sum1 = vfmaq_f32(sum1, diff1, diff1);
+
+        a2 = vld1q_f32(&ax[i + 4]);
+        b2 = vld1q_f32(&bx[i + 4]);
+        diff2 = vsubq_f32(a2, b2);
+        sum2 = vfmaq_f32(sum2, diff2, diff2);
+
+        a3 = vld1q_f32(&ax[i + 8]);
+        b3 = vld1q_f32(&bx[i + 8]);
+        diff3 = vsubq_f32(a3, b3);
+        sum3 = vfmaq_f32(sum3, diff3, diff3);
+
+        a4 = vld1q_f32(&ax[i + 12]);
+        b4 = vld1q_f32(&bx[i + 12]);
+        diff4 = vsubq_f32(a4, b4);
+        sum4 = vfmaq_f32(sum4, diff4, diff4);
+    }
+
+    /* Handle remaining elements in groups of 4 when possible */
+    for (; i < dim - 3; i += 4) {
+        float32x4_t a = vld1q_f32(&ax[i]);
+        float32x4_t b = vld1q_f32(&bx[i]);
+        float32x4_t diff = vsubq_f32(a, b);
+        sum1 = vfmaq_f32(sum1, diff, diff);
+    }
+
+    /* Combine all sums using pairwise addition for better numerical stability */
+    sum1 = vaddq_f32(sum1, sum2);
+    sum3 = vaddq_f32(sum3, sum4);
+    sum1 = vaddq_f32(sum1, sum3);
+
+    /* Handle final remaining elements (0-3) */
+    float remaining_sum = 0.0f;
+    for (; i < dim; i++) {
+        float diff = ax[i] - bx[i];
+        remaining_sum += diff * diff;
+    }
+
+    /* Horizontal sum with optimal pairwise reduction */
+    float32x2_t sum_lo = vget_low_f32(sum1);
+    float32x2_t sum_hi = vget_high_f32(sum1);
+    float32x2_t sum_pair = vpadd_f32(sum_lo, sum_hi);
+    float neon_sum = vget_lane_f32(vpadd_f32(sum_pair, sum_pair), 0);
+
+    return neon_sum + remaining_sum;
+}
+
+/* Improved NEON implementation with better accuracy */
+static inline float
+VectorL2SquaredDistanceNEONImproved(int dim, float *ax, float *bx)
+{
+    float32x4_t sum = vdupq_n_f32(0.0f);
+    float32x4_t a, b, diff;
+    float remaining_sum = 0.0f;
+    int i = 0;
+
+    /* Process 4 elements at a time for better cache efficiency and accuracy */
+    for (; i < dim - 3; i += 4) {
+        a = vld1q_f32(&ax[i]);
+        b = vld1q_f32(&bx[i]);
+        diff = vsubq_f32(a, b);
+        /* Use fused multiply-add for better accuracy */
+        sum = vfmaq_f32(sum, diff, diff);
+    }
+
+    /* Handle remaining elements with NEON when possible */
+    if (i < dim) {
+        float temp_a[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        float temp_b[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+        /* Copy remaining elements */
+        for (int j = 0; j < dim - i; j++) {
+            temp_a[j] = ax[i + j];
+            temp_b[j] = bx[i + j];
+        }
+
+        a = vld1q_f32(temp_a);
+        b = vld1q_f32(temp_b);
+        diff = vsubq_f32(a, b);
+
+        /* Only accumulate the valid elements */
+        float partial_sum[4];
+        vst1q_f32(partial_sum, vmulq_f32(diff, diff));
+        for (int j = 0; j < dim - i; j++) {
+            remaining_sum += partial_sum[j];
+        }
+    }
+
+    /* Horizontal sum with pairwise addition for better accuracy */
+    float32x2_t sum_lo = vget_low_f32(sum);
+    float32x2_t sum_hi = vget_high_f32(sum);
+    float32x2_t sum_pair = vpadd_f32(sum_lo, sum_hi);
+    float neon_sum = vget_lane_f32(vpadd_f32(sum_pair, sum_pair), 0);
 
     return neon_sum + remaining_sum;
 }
@@ -144,7 +263,7 @@ test_l2_distance(float *vectors, float *query_vec)
     }
 
     for (int i = 0; i < NUM_VECTORS; i++) {
-        float neon_result = VectorL2SquaredDistanceNEON(DIM, &vectors[i * DIM], query_vec);
+        float neon_result = VectorL2SquaredDistanceNEON_FMA(DIM, &vectors[i * DIM], query_vec);
         float simple_result = VectorL2SquaredDistanceSimple(DIM, &vectors[i * DIM], query_vec);
 
         float abs_diff = fabsf(neon_result - simple_result);
@@ -221,7 +340,7 @@ test_l2_distance(float *vectors, float *query_vec)
 
     /* Warm up */
     for (int i = 0; i < 10; i++) {
-        VectorL2SquaredDistanceNEON(DIM, &vectors[i * DIM], query_vec);
+        VectorL2SquaredDistanceNEON_FMA(DIM, &vectors[i * DIM], query_vec);
         VectorL2SquaredDistanceSimple(DIM, &vectors[i * DIM], query_vec);
     }
 
@@ -229,7 +348,7 @@ test_l2_distance(float *vectors, float *query_vec)
     start_time = get_time_us();
     for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
         for (int i = 0; i < NUM_VECTORS; i++) {
-            total_neon_l2 += VectorL2SquaredDistanceNEON(DIM, &vectors[i * DIM], query_vec);
+            total_neon_l2 += VectorL2SquaredDistanceNEON_FMA(DIM, &vectors[i * DIM], query_vec);
         }
     }
     end_time = get_time_us();
@@ -244,6 +363,10 @@ test_l2_distance(float *vectors, float *query_vec)
     end_time = get_time_us();
     simple_l2_time = end_time - start_time;
 
+    /* Calculate difference between total distance sums */
+    float total_sum_diff = fabsf(total_neon_l2 - total_simple_l2);
+    float total_sum_percent_diff = (total_sum_diff / total_simple_l2) * 100.0f;
+
     printf("L2 Distance Benchmark Results:\n");
     printf("NEON Implementation:\n");
     printf("  Total time: %.2f ms\n", neon_l2_time / 1000.0);
@@ -253,6 +376,9 @@ test_l2_distance(float *vectors, float *query_vec)
     printf("  Total time: %.2f ms\n", simple_l2_time / 1000.0);
     printf("  Average time per vector: %.3f us\n", (float)simple_l2_time / (NUM_VECTORS * NUM_ITERATIONS));
     printf("  Total distance sum: %f\n", total_simple_l2);
+    printf("\nTotal Distance Sum Comparison:\n");
+    printf("  Absolute difference: %.9f\n", total_sum_diff);
+    printf("  Percentage difference: %.6f%%\n", total_sum_percent_diff);
     printf("\nL2 Distance Speedup: %.2fx\n\n", (float)simple_l2_time / neon_l2_time);
 }
 
