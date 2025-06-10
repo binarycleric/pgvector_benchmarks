@@ -56,3 +56,8 @@ vector_benchmark_arm64
 vector_benchmark.s
 qemu-linux
 qemu-test
+
+vector_benchmark_annotated.s
+vector_benchmark_neon_asm.txt
+vector_benchmark_no_inline.s
+vector_benchmark_simple_asm.txt
