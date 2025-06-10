@@ -63,21 +63,6 @@ vector_benchmark_simple_asm.txt: vector_benchmark_no_inline.s
 	fi
 	@echo "Extracted $$(wc -l < $@) lines of Simple assembly"
 
-# Side-by-side comparison (requires column/pr command)
-compare-side-by-side: vector_benchmark_neon_asm.txt vector_benchmark_simple_asm.txt
-	@echo "=== Side-by-Side Assembly Comparison ==="
-	@echo ""
-	@if command -v pr >/dev/null 2>&1; then \
-		pr -m -t -w 120 vector_benchmark_neon_asm.txt vector_benchmark_simple_asm.txt | \
-		sed '1i NEON_FMA                                    |  Simple'; \
-	else \
-		echo "NEON_FMA Assembly:"; \
-		cat vector_benchmark_neon_asm.txt; \
-		echo ""; \
-		echo "Simple Assembly:"; \
-		cat vector_benchmark_simple_asm.txt; \
-	fi
-
 # Count instructions in each function
 compare-instruction-count: vector_benchmark_neon_asm.txt vector_benchmark_simple_asm.txt
 	@echo "=== Instruction Count Comparison ==="
@@ -88,12 +73,6 @@ compare-instruction-count: vector_benchmark_neon_asm.txt vector_benchmark_simple
 	@echo ""
 	@echo "NEON instructions in NEON_FMA:"
 	@grep -E '^\s+(ld1|st1|fadd|fsub|fmul|fmla|movi|v[a-z]|faddp)' vector_benchmark_neon_asm.txt | wc -l || echo "0"
-
-# All assembly analysis
-analyze-functions: compare-functions compare-instruction-count
-	@echo ""
-	@echo "=== Analysis Complete ==="
-	@echo "Use 'make compare-side-by-side' for side-by-side view"
 
 # Check CPU features and capabilities
 cpu-info:
@@ -145,4 +124,4 @@ run-arm64:
 clean:
 	rm -f vector_benchmark vector_benchmark.s vector_benchmark_opt.s vector_benchmark_unopt.s vector_benchmark_annotated.s vector_benchmark_debug.s vector_benchmark_no_inline.s vector_benchmark_neon_asm.txt vector_benchmark_simple_asm.txt
 
-.PHONY: all run clean asm asm-annotated asm-no-inline compare-functions compare-instruction-count analyze-functions cpu-info debug-asm
+.PHONY: all run clean asm asm-annotated asm-no-inline compare-functions compare-instruction-count cpu-info debug-asm
