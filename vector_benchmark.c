@@ -136,56 +136,6 @@ VectorL2SquaredDistanceNEON_FMA(int dim, float *ax, float *bx)
     return neon_sum + remaining_sum;
 }
 
-/* Improved NEON implementation with better accuracy */
-static inline float
-VectorL2SquaredDistanceNEONImproved(int dim, float *ax, float *bx)
-{
-    float32x4_t sum = vdupq_n_f32(0.0f);
-    float32x4_t a, b, diff;
-    float remaining_sum = 0.0f;
-    int i = 0;
-
-    /* Process 4 elements at a time for better cache efficiency and accuracy */
-    for (; i < dim - 3; i += 4) {
-        a = vld1q_f32(&ax[i]);
-        b = vld1q_f32(&bx[i]);
-        diff = vsubq_f32(a, b);
-        /* Use fused multiply-add for better accuracy */
-        sum = vfmaq_f32(sum, diff, diff);
-    }
-
-    /* Handle remaining elements with NEON when possible */
-    if (i < dim) {
-        float temp_a[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        float temp_b[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-
-        /* Copy remaining elements */
-        for (int j = 0; j < dim - i; j++) {
-            temp_a[j] = ax[i + j];
-            temp_b[j] = bx[i + j];
-        }
-
-        a = vld1q_f32(temp_a);
-        b = vld1q_f32(temp_b);
-        diff = vsubq_f32(a, b);
-
-        /* Only accumulate the valid elements */
-        float partial_sum[4];
-        vst1q_f32(partial_sum, vmulq_f32(diff, diff));
-        for (int j = 0; j < dim - i; j++) {
-            remaining_sum += partial_sum[j];
-        }
-    }
-
-    /* Horizontal sum with pairwise addition for better accuracy */
-    float32x2_t sum_lo = vget_low_f32(sum);
-    float32x2_t sum_hi = vget_high_f32(sum);
-    float32x2_t sum_pair = vpadd_f32(sum_lo, sum_hi);
-    float neon_sum = vget_lane_f32(vpadd_f32(sum_pair, sum_pair), 0);
-
-    return neon_sum + remaining_sum;
-}
-
 /* Simple implementation */
 static inline float
 VectorL2SquaredDistanceSimple(int dim, float *ax, float *bx)
