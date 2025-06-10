@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -O2 -Wall -Wextra -march=native -mtune=native -I/usr/include
+CFLAGS = -O2 -Wall -Wextra -march=native -mtune=native -I/usr/include -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math
 LDFLAGS = -lm
 
 all: vector_benchmark
@@ -22,7 +22,7 @@ vector_benchmark_annotated.s: vector_benchmark.c
 asm-no-inline: vector_benchmark_no_inline.s
 
 vector_benchmark_no_inline.s: vector_benchmark.c
-	$(CC) -O1 -fno-inline -Wall -Wextra -march=native -mtune=native -S -fverbose-asm -o $@ $<
+	$(CC) -O1 -fno-inline -Wall -Wextra -march=native -mtune=native -S -ftree-vectorize -fverbose-asm -fassociative-math -fno-signed-zeros -fno-trapping-math -o $@ $<
 	@echo "Assembly with preserved functions generated in vector_benchmark_no_inline.s"
 	@echo "Function symbols available:"
 	@grep -E "^[_A-Za-z][A-Za-z0-9_]*:" $@ | head -10
