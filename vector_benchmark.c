@@ -10,7 +10,7 @@
 #define NUM_VECTORS 10000
 #define NUM_ITERATIONS 1000
 #define EPSILON 0.000001f  // Small value for float comparison
-#define MAX_PERCENT_DIFF 0.0005f  // Maximum allowed percentage difference
+#define MAX_PERCENT_DIFF 0.00025f  // Maximum allowed percentage difference
 
 /* NEON implementation */
 static inline float
