@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -O2 -Wall -Wextra -march=native -mtune=native -I/usr/include -I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include
+CFLAGS = -O2 -Wall -Wextra -march=native -mtune=native -I/usr/include
 LDFLAGS = -lm
 
 all: vector_benchmark
@@ -60,6 +60,10 @@ endif
 run: vector_benchmark
 	./vector_benchmark
 	$(MAKE) clean
+
+run-arm64:
+	podman build --arch=arm64 -t pgvector-benchmarks -f Dockerfile.arm64 .
+	podman run --rm --arch=arm64 pgvector-benchmarks
 
 clean:
 	rm -f vector_benchmark vector_benchmark.s vector_benchmark_opt.s vector_benchmark_unopt.s vector_benchmark_annotated.s vector_benchmark_debug.s
