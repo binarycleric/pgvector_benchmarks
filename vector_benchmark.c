@@ -236,6 +236,18 @@ float_within_tolerance(float a, float b)
     return percent_diff <= MAX_PERCENT_DIFF;
 }
 
+/* Comparison function for qsort - compares two floats */
+static int
+compare_floats(const void *a, const void *b)
+{
+    float fa = *(const float*)a;
+    float fb = *(const float*)b;
+
+    if (fa < fb) return -1;
+    if (fa > fb) return 1;
+    return 0;
+}
+
 /* Test L2 Distance implementations */
 static void
 test_l2_distance(float *vectors, float *query_vec)
@@ -300,22 +312,9 @@ test_l2_distance(float *vectors, float *query_vec)
         }
     }
 
-    /* Sort arrays for percentile calculation */
-    /* Simple bubble sort for small arrays - could use qsort for efficiency */
-    for (int i = 0; i < NUM_VECTORS - 1; i++) {
-        for (int j = 0; j < NUM_VECTORS - i - 1; j++) {
-            if (abs_diffs[j] > abs_diffs[j + 1]) {
-                float temp = abs_diffs[j];
-                abs_diffs[j] = abs_diffs[j + 1];
-                abs_diffs[j + 1] = temp;
-            }
-            if (percent_diffs[j] > percent_diffs[j + 1]) {
-                float temp = percent_diffs[j];
-                percent_diffs[j] = percent_diffs[j + 1];
-                percent_diffs[j + 1] = temp;
-            }
-        }
-    }
+    /* Sort arrays for percentile calculation using qsort for efficiency */
+    qsort(abs_diffs, NUM_VECTORS, sizeof(float), compare_floats);
+    qsort(percent_diffs, NUM_VECTORS, sizeof(float), compare_floats);
 
     /* Calculate percentiles */
     int p95_idx = (int)((NUM_VECTORS - 1) * 0.95);
