@@ -5,6 +5,6 @@ RUN yum install -y clang make glibc-static
 COPY . /app/
 WORKDIR /app
 
-RUN clang -O2 -Wall -Wextra -march=native -mtune=native -static -o vector_benchmark vector_benchmark.c -lm
+RUN clang -O2 -Wall -Wextra -march=native -mtune=native -ftree-vectorize -fassociative-math -fno-signed-zeros -fno-trapping-math -static -o vector_benchmark vector_benchmark.c -lm
 
 CMD ["./vector_benchmark"]
